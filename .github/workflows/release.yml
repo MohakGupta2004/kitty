@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release, e.g. v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAGS: migrated_fynedo
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build a universal binary
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          for arch in arm64 amd64; do
+            CGO_ENABLED=1 GOARCH=$arch go build -tags "$TAGS" -ldflags "$LDFLAGS" -o "dist/kitty-$arch" .
+          done
+          lipo -create -output dist/kitty dist/kitty-arm64 dist/kitty-amd64
+          lipo -info dist/kitty
+
+      - name: Package Kitty.app
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          go run fyne.io/tools/cmd/fyne@latest package \
+            -os darwin -name Kitty -icon icon.png \
+            -app-version "${VERSION#v}" -executable dist/kitty
+          # ditto keeps the bundle structure and resource forks that zip drops.
+          ditto -c -k --keepParent Kitty.app "dist/Kitty-${VERSION}-macos-universal.zip"
+          tar -czf "dist/kitty-${VERSION}-darwin-universal.tar.gz" -C dist kitty
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+
+  linux:
+    name: Linux (amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          CGO_ENABLED=1 go build -tags "$TAGS" -ldflags "$LDFLAGS" -o dist/kitty .
+          tar -czf "dist/kitty-${VERSION}-linux-amd64.tar.gz" -C dist kitty
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+
+  windows:
+    name: Windows (amd64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          # -H windowsgui keeps a console window from opening behind the cat.
+          LDFLAGS="-s -w -H windowsgui -X main.version=${VERSION} -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          CGO_ENABLED=1 go build -tags "$TAGS" -ldflags "$LDFLAGS" -o dist/kitty.exe .
+          powershell -Command "Compress-Archive -Path dist/kitty.exe -DestinationPath dist/kitty-${VERSION}-windows-amd64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  release:
+    name: Publish
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload the binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          find artifacts -type f -print
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" $(find artifacts -type f) --clobber
+          else
+            gh release create "$VERSION" $(find artifacts -type f) \
+              --title "kitty $VERSION" \
+              --generate-notes
+          fi

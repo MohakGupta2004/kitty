@@ -1,0 +1,8 @@
+Website = "https://github.com/MohakGupta2004/kitty"
+
+[Details]
+Icon = "icon.png"
+Name = "Kitty"
+ID = "com.mohakgupta.desktopkitty"
+Version = "1.0.0"
+Build = 2

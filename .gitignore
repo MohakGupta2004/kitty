@@ -1,0 +1,9 @@
+# Build output
+/kitty
+/kitty.exe
+/dist/
+*.app/
+
+# OS and editor noise
+.DS_Store
+.impeccable/
