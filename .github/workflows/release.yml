@@ -77,7 +77,9 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+          sudo apt-get install -y \
+            libgl1-mesa-dev xorg-dev libxkbcommon-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev libxkbcommon-x11-dev
 
       - name: Build
         run: |
